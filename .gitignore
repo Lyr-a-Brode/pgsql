@@ -5,3 +5,4 @@ ebin
 target
 rebar.lock
 _build
+.idea

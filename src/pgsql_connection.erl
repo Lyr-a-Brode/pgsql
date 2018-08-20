@@ -1408,6 +1408,17 @@ process_active_data(<<Code:8/integer, Size:32/integer, Tail/binary>>, #state{soc
         {{ok, #parameter_status{name = Name, value = Value}}, Rest} ->
             State1 = handle_parameter(Name, Value, sync, State0),
             process_active_data(Rest, State1);
+        {{ok, #error_response{fields = Fields} = ErrorResp}, Rest} ->
+            error_logger:error_msg("Asynchronous error\n~p\n", [ErrorResp]),
+            case proplists:get_value(code, Fields) of
+                <<"57000">> ->
+                    process_active_data(Rest, State0);
+                <<"57014">> ->
+                    process_active_data(Rest, State0);
+                _ ->
+                    SockModule:close(Sock),
+                    State0#state{socket = closed}
+            end;
         {{ok, Message}, Rest} ->
             error_logger:warning_msg("Unexpected asynchronous message\n~p\n", [Message]),
             process_active_data(Rest, State0);
