@@ -532,13 +532,19 @@ handle_info({_Tag, Socket, Data}, #state{socket = {_SocketModule, Socket}} = Sta
     State1 = process_active_data(Data, State0),
     set_active_once(State1),
     {noreply, State1};
-handle_info({ClosedTag, Socket}, #state{socket = {_SocketModule, Socket}} = State0) when ClosedTag =:= tcp_closed orelse ClosedTag =:= ssl_closed ->
-    State1 = State0#state{socket = closed},
-    {noreply, State1};
-handle_info({ErrorTag, Socket, _SocketError}, #state{socket = {SocketModule, Socket}} = State0) when ErrorTag =:= tcp_error orelse ErrorTag =:= ssl_error ->
+handle_info({ClosedTag, Socket}, #state{socket = {_SocketModule, Socket}, options = Options} = State0)
+    when ClosedTag =:= tcp_closed orelse ClosedTag =:= ssl_closed ->
+    case proplists:get_value(reconnect, Options, true) of
+        true -> {noreply, State0#state{socket = closed}};
+        false -> {stop, {error, closed}, State0}
+    end;
+handle_info({ErrorTag, Socket, _SocketError}, #state{socket = {SocketModule, Socket}, options = Options} = State0)
+    when ErrorTag =:= tcp_error orelse ErrorTag =:= ssl_error ->
     _ = SocketModule:close(Socket),
-    State1 = State0#state{socket = closed},
-    {noreply, State1};
+    case proplists:get_value(reconnect, Options, true) of
+        true -> {noreply, State0#state{socket = closed}};
+        false -> {stop, {error, closed}, State0}
+    end;
 handle_info({Tag, _OtherSocket, _Data}, State0) when Tag =:= tcp orelse Tag =:= ssl ->
     {noreply, State0};
 handle_info({ClosedTag, _OtherSocket}, State0) when ClosedTag =:= tcp_closed orelse ClosedTag =:= ssl_closed ->
@@ -1408,17 +1414,9 @@ process_active_data(<<Code:8/integer, Size:32/integer, Tail/binary>>, #state{soc
         {{ok, #parameter_status{name = Name, value = Value}}, Rest} ->
             State1 = handle_parameter(Name, Value, sync, State0),
             process_active_data(Rest, State1);
-        {{ok, #error_response{fields = Fields} = ErrorResp}, Rest} ->
+        {{ok, #error_response{} = ErrorResp}, Rest} ->
             error_logger:error_msg("Asynchronous error\n~p\n", [ErrorResp]),
-            case proplists:get_value(code, Fields) of
-                <<"57000">> ->
-                    process_active_data(Rest, State0);
-                <<"57014">> ->
-                    process_active_data(Rest, State0);
-                _ ->
-                    SockModule:close(Sock),
-                    State0#state{socket = closed}
-            end;
+            process_active_data(Rest, State0);
         {{ok, Message}, Rest} ->
             error_logger:warning_msg("Unexpected asynchronous message\n~p\n", [Message]),
             process_active_data(Rest, State0);
